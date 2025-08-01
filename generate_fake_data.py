@@ -5,6 +5,7 @@ import math
 import time
 from multiprocessing import Process, cpu_count
 from faker import Faker
+from tqdm import tqdm
 
 # --- Configuration ---
 OUTPUT_FILE_NAME = 'large_pii_dataset.csv'
@@ -71,6 +72,7 @@ def create_pii_record(faker_instance):
 
 def generate_chunk(start_row, num_rows, temp_filename):
     """A worker function that generates a chunk of data and saves it to a temporary CSV."""
+    start_time = time.time()
     temp_filepath = os.path.join(TEMP_DIR, temp_filename)
     print(f"  ▶️  Process {os.getpid()} starting to generate {num_rows:,} rows into {temp_filepath}")
     fake = Faker()
@@ -80,12 +82,17 @@ def generate_chunk(start_row, num_rows, temp_filename):
     with open(temp_filepath, 'w', newline='', encoding='utf-8') as csvfile:
         writer = csv.DictWriter(csvfile, fieldnames=headers)
         writer.writeheader()
-        for _ in range(num_rows):
+        
+        # Add tqdm progress bar
+        for _ in tqdm(range(num_rows), desc=f"Process {os.getpid()} Progress"):
             writer.writerow(create_pii_record(fake))
-    print(f"  ✅ Process {os.getpid()} finished.")
+    
+    end_time = time.time()
+    print(f"  ✅ Process {os.getpid()} finished in {end_time - start_time:.2f} seconds.")
 
 def combine_files(num_processes, final_filename, headers):
     """Combines all temporary CSV files into one final file."""
+    start_time = time.time()
     print(f"\n🤝 Combining {num_processes} temporary files into '{final_filename}'...")
     with open(final_filename, 'w', newline='', encoding='utf-8') as outfile:
         writer = csv.DictWriter(outfile, fieldnames=headers)
@@ -103,9 +110,9 @@ def combine_files(num_processes, final_filename, headers):
             except FileNotFoundError:
                 print(f"  ⚠️  Warning: Temporary file {temp_filepath} not found. It might have had no rows to generate.")
 
-    print("🧹 Cleaned up temporary files.")
+    end_time = time.time()
+    print(f"🧹 Cleaned up temporary files in {end_time - start_time:.2f} seconds.")
 
-# --- Main script execution ---
 if __name__ == "__main__":
     start_time = time.time()
     
