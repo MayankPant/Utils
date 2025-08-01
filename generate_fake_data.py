@@ -83,8 +83,8 @@ def generate_chunk(start_row, num_rows, temp_filename):
         writer = csv.DictWriter(csvfile, fieldnames=headers)
         writer.writeheader()
         
-        # Add tqdm progress bar
-        for _ in tqdm(range(num_rows), desc=f"Process {os.getpid()} Progress"):
+        # Use a more descriptive progress bar description
+        for _ in tqdm(range(num_rows), desc=f"PID {os.getpid()}", unit=" rows", ncols=100):
             writer.writerow(create_pii_record(fake))
     
     end_time = time.time()
@@ -103,36 +103,77 @@ def combine_files(num_processes, final_filename, headers):
             temp_filepath = os.path.join(TEMP_DIR, temp_filename)
             try:
                 with open(temp_filepath, 'r', encoding='utf-8') as infile:
-                    reader = csv.DictReader(infile)
+                    # Skip the header of each temporary file
+                    reader = csv.reader(infile)
+                    next(reader) 
+                    # Write rows directly for better performance
                     for row in reader:
-                        writer.writerow(row)
+                        outfile.write(','.join(f'"{item}"' for item in row) + '\n')
                 os.remove(temp_filepath)
             except FileNotFoundError:
                 print(f"  ⚠️  Warning: Temporary file {temp_filepath} not found. It might have had no rows to generate.")
+            except StopIteration:
+                print(f"  ℹ️  Info: Temporary file {temp_filepath} was empty.")
+
 
     end_time = time.time()
     print(f"🧹 Cleaned up temporary files in {end_time - start_time:.2f} seconds.")
 
-if __name__ == "__main__":
-    start_time = time.time()
+def estimate_time(total_rows, num_processes):
+    """Estimates the time taken to generate the data, accounting for parallelism."""
+    print("\n🔬 Running a quick benchmark to estimate generation time...")
+    fake = Faker()
+    sample_size = 200 # Use a slightly larger sample for better accuracy
     
+    start_time_sample = time.time()
+    for _ in range(sample_size):
+        create_pii_record(fake)
+    end_time_sample = time.time()
+
+    # Calculate time for a single row
+    time_per_row = (end_time_sample - start_time_sample) / sample_size
+    
+    # Calculate total time for a single thread
+    estimated_single_thread_time = time_per_row * total_rows
+    
+    # Adjust for parallelism
+    estimated_parallel_time = estimated_single_thread_time / num_processes
+
+    # Add a small buffer for overhead (process creation, file combining)
+    overhead_buffer_seconds = 5 + (num_processes * 0.5)
+    total_estimated_time = estimated_parallel_time + overhead_buffer_seconds
+
+    print(f"⏳ Estimated generation time with {num_processes} cores: {total_estimated_time / 60:.2f} minutes.")
+    return total_estimated_time
+
+
+if __name__ == "__main__":
+    script_start_time = time.time()
+
     user_choice = get_user_choice()
     TOTAL_ROWS = get_number_of_rows(user_choice)
 
-    # Use one less than the total number of cores, but always use at least 1 to make sure system does not lag.
+    # --- REVISED ESTIMATION LOGIC ---
+    # 1. Determine the number of processes first
     total_cores = cpu_count()
+    # Use one less than the total number of cores, but always use at least 1 to keep system responsive.
     num_processes = max(1, total_cores - 1) 
-    print(f"\n⚙️  Utilizing {num_processes} of {total_cores} available CPU cores to keep the system responsive.")
     
+    # 2. Run the new estimation function that accounts for parallelism
+    estimated_total_time = estimate_time(TOTAL_ROWS, num_processes)
+
+    print(f"\n⚙️  Utilizing {num_processes} of {total_cores} available CPU cores.")
+
     chunk_size = math.ceil(TOTAL_ROWS / num_processes)
-    
     processes = []
-    
+
+    generation_start_time = time.time()
+
     for i in range(num_processes):
         start_row = i * chunk_size
         rows_for_this_process = min(chunk_size, TOTAL_ROWS - start_row)
         if rows_for_this_process <= 0: continue
-            
+
         temp_filename = f'temp_part_{i}.csv'
         process = Process(target=generate_chunk, args=(start_row, rows_for_this_process, temp_filename))
         processes.append(process)
@@ -140,11 +181,24 @@ if __name__ == "__main__":
 
     for process in processes:
         process.join()
+    
+    generation_end_time = time.time()
+    actual_generation_time = generation_end_time - generation_start_time
+    print(f"\n⏱️  Actual generation time across all cores: {actual_generation_time / 60:.2f} minutes.")
+
 
     dummy_faker = Faker()
     file_headers = create_pii_record(dummy_faker).keys()
     combine_files(num_processes, OUTPUT_FILE_NAME, file_headers)
-    
-    end_time = time.time()
+
+    script_end_time = time.time()
+    actual_total_time = script_end_time - script_start_time
+
     print(f"\n🎉 Success! Your file '{OUTPUT_FILE_NAME}' with {TOTAL_ROWS:,} rows has been created.")
-    print(f"⏱️  Total time taken: {end_time - start_time:.2f} seconds.")
+    print(f"⏱️  Total script time (generation + combining): {actual_total_time / 60:.2f} minutes.")
+
+    # --- REVISED ACCURACY CALCULATION ---
+    # Compare the estimated time against the actual generation time
+    if actual_generation_time > 0:
+        accuracy = 100 * (1 - abs(estimated_total_time - actual_generation_time) / actual_generation_time)
+        print(f"📊 Estimation Accuracy (compared to generation phase): {max(0, accuracy):.2f}%")
