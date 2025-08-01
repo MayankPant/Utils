@@ -1,0 +1,5 @@
+colorama==0.4.6
+Faker==37.5.3
+tdqm==0.0.1
+tqdm==4.67.1
+tzdata==2025.2
